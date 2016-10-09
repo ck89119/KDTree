@@ -26,8 +26,11 @@ template <size_t N, typename ElemType>
 class KDTree {
 private:
     struct Node {
-      Node(const Point<N>& p): point(p) { left = right = NULL; }
+      Node(const Point<N>& p, const ElemType& v): point(p), value(v) { 
+        left = right = NULL; 
+      }
       Point<N> point;
+      ElemType value;
       Node *left, *right;
     };
 
@@ -114,12 +117,11 @@ public:
 
     void rec(const Point<N>& key, const Node* cur, BoundedPQueue<ElemType>& bpq, int d) const;
 
-    void TestInsert(Node* cur);
-
-    Node* GetRoot() const { return root; }
+    Node* FindNode(const Point<N>& pt) const;
 
 private:
     Node *root;
+    size_t tree_size;
     map<Point<N>, ElemType> data;
 };
 
@@ -128,12 +130,14 @@ private:
 template <size_t N, typename ElemType>
 KDTree<N, ElemType>::KDTree() {
   root = NULL;
+  tree_size = 0;
   data.clear();
 }
 
 template <size_t N, typename ElemType>
 KDTree<N, ElemType>::KDTree(const KDTree& rhs) {
   data = rhs.data;
+  tree_size = rhs.tree_size;
   root = CopyTree(rhs.root);
 }
 
@@ -142,7 +146,7 @@ typename KDTree<N, ElemType>::Node*
 KDTree<N, ElemType>::CopyTree(const Node* node) {
   if (node == NULL) return NULL;
 
-  Node *cur = new Node(node->point);
+  Node *cur = new Node(node->point, node->value);
   cur->left = CopyTree(node->left);
   cur->right = CopyTree(node->right);
   return cur;
@@ -164,20 +168,21 @@ void KDTree<N, ElemType>::DestructTree(Node* node) {
 
 template <size_t N, typename ElemType>
 ElemType& KDTree<N, ElemType>::at(const Point<N>& pt) {
-  if (contains(pt)) return data[pt];
+  Node* node = FindNode(pt);
+  if (node != NULL) return node->value;
   else throw out_of_range("no such point");
 }
 
 template <size_t N, typename ElemType>
 const ElemType& KDTree<N, ElemType>::at(const Point<N>& pt) const {
-  auto it = data.find(pt);
-  if (contains(pt)) return const_cast<ElemType&>(it->second);
+  Node* node = FindNode(pt);
+  if (node != NULL) return const_cast<ElemType&>(node->value);
   else throw out_of_range("no such point");
 }
 
 template <size_t N, typename ElemType>
 bool KDTree<N, ElemType>::contains(const Point<N>& pt) const {
-  return data.find(pt) != data.end();
+  return FindNode(pt) != NULL;
 }
 
 template <size_t N, typename ElemType>
@@ -187,19 +192,20 @@ size_t KDTree<N, ElemType>::dimension() const {
 
 template <size_t N, typename ElemType>
 bool KDTree<N, ElemType>::empty() const {
-  return data.empty();
+  return size() == 0;
 }
 
 template <size_t N, typename ElemType>
 void KDTree<N, ElemType>::insert(const Point<N>& pt, const ElemType& value) {
-  if (contains(pt)) {
-    data[pt] = value;
+  Node* node = FindNode(pt);
+  if (node != NULL) {
+    node->value= value;
     return;
   }
 
-  data[pt] = value;
   if (root == NULL) {
-    root = new Node(pt);
+    root = new Node(pt, value);
+    tree_size += 1;
     return;
   }
 
@@ -208,44 +214,21 @@ void KDTree<N, ElemType>::insert(const Point<N>& pt, const ElemType& value) {
   while (true) {
     if (pt[d] < cur->point[d]) {
       if (cur->left == NULL) {
-        cur->left = new Node(pt);
+        cur->left = new Node(pt, value);
+        tree_size += 1;
         return;
       }
       cur = cur->left;
     }
     else {
       if (cur->right == NULL) {
-        cur->right = new Node(pt);
+        cur->right = new Node(pt, value);
+        tree_size += 1;
         return;
       }
       cur = cur->right;
     }
     d = (d + 1) % N;
-  }
-}
-
-template <size_t N, typename ElemType>
-void KDTree<N, ElemType>::TestInsert(Node* cur) {
-  cout << "###test_insert###" << endl;
-  if (cur == NULL) return;
-  for (int i = 0; i < N; i++)
-    cout << cur->point[i];
-  cout << ": " << endl;
-
-  if (cur->left != NULL) {
-    cout << "left: ";
-    for (int i = 0; i < N; i++)
-      cout << cur->left->point[i];
-    cout << endl;
-    test_insert(cur->left);
-  }
-
-  if (cur->right != NULL) {
-    cout << "right: ";
-    for (int i = 0; i < N; i++)
-      cout << cur->right->point[i];
-    cout << endl;
-    test_insert(cur->right);
   }
 }
 
@@ -273,9 +256,8 @@ ElemType KDTree<N, ElemType>::kNNValue(const Point<N>& key, size_t k) const {
 template <size_t N, typename ElemType>
 void KDTree<N, ElemType>::rec(const Point<N>& key, const Node* cur, BoundedPQueue<ElemType>& bpq, int d) const {
   if (cur == NULL) return;
-
-  auto it = data.find(cur->point);
-  bpq.enqueue(it->second, Distance(key, cur->point));
+  
+  bpq.enqueue(cur->value, Distance(key, cur->point));
 
   Node* other_sub = NULL;
   if (key[d] < cur->point[d]) {
@@ -298,22 +280,50 @@ KDTree<N, ElemType>& KDTree<N, ElemType>::operator=(const KDTree& rhs) {
   data.clear();
   DestructTree(root);
   data = rhs.data;
+  tree_size = rhs.tree_size;
   root = CopyTree(rhs.root);
   return *this;
 }
 
 template <size_t N, typename ElemType>
 ElemType& KDTree<N, ElemType>::operator[](const Point<N>& pt) {
-  if (!contains(pt)) {
-    insert(pt, 0); 
+  Node* node = FindNode(pt);
+  if (node == NULL) {
+    insert(pt, 0);
   }
-  return data[pt];          
+  // if (!contains(pt)) {
+  //   insert(pt, 0); 
+  // }
+  node = FindNode(pt);
+  return node->value; 
 }
 
 template <size_t N, typename ElemType>
 size_t KDTree<N, ElemType>::size() const {
-  return data.size();
+  return tree_size;
 }
 
+template <size_t N, typename ElemType>
+typename KDTree<N, ElemType>::Node* 
+KDTree<N, ElemType>::FindNode(const Point<N>& pt) const {
+  Node* cur = root;
+  int d = 0;
+  while (true) {
+    if (cur == NULL) return NULL;
+
+    bool flag = true;
+    for (int i = 0; i < N; ++i)
+      if (pt[i] != cur->point[i]) {
+        flag = false;
+        break;
+      }
+    if (flag) return cur;
+
+    if (pt[d] < cur->point[d]) cur = cur->left;
+    else cur = cur->right;
+    d = (d + 1) % N;
+  }
+  return NULL;
+}
 
 #endif // KDTREE_INCLUDED
